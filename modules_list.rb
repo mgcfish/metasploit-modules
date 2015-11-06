@@ -26,6 +26,11 @@ class Metasploit3 < Msf::Auxiliary
         Opt::RPORT(873),
         OptBool.new('AUTH_CHECK', [true, 'Check authentication or not', false])
       ], self.class)
+
+    register_advanced_options(
+      [
+        OptInt.new('TIMEOUT', [false, 'Maximum number of seconds to wait rsync response', 4])
+      ], self.class)
   end
 
   def rsync(dir)
@@ -34,27 +39,27 @@ class Metasploit3 < Msf::Auxiliary
     version = sock.get_once # server_initialisation
     return if version.blank?
 
-    sock.get(3) # server_motd
+    sock.get(datastore['TIMEOUT']) # server_motd
     sock.puts(version) # client_initialisation
     sock.puts(dir) # client_query
-    data = sock.get(3) # module_list
-    data.gsub!('@RSYNCD: EXIT', '')
+    data = sock.get(datastore['TIMEOUT']) # module_list
+    data.gsub!('@RSYNCD: EXIT', '') unless data.blank?
     disconnect
     [version, data]
   end
 
-  def auth?(dir)
+  def auth?(ip, port, dir)
     _version, data = rsync(dir)
     if data && data =~ /RSYNCD: OK/m
-      vprint_status("#{dir} needs authentication: false")
+      vprint_status("#{ip}:#{port}: #{dir} needs authentication: false")
       false
     else
-      vprint_status("#{dir} needs authentication: true")
+      vprint_status("#{ip}:#{port}: #{dir} needs authentication: true")
       true
     end
   end
 
-  def module_list_format(ip, module_list)
+  def module_list_format(ip, port, module_list)
     mods = {}
     rows = []
 
@@ -69,7 +74,7 @@ class Metasploit3 < Msf::Auxiliary
       next unless name
 
       if datastore['AUTH_CHECK']
-        is_auth = "#{auth?(name)}"
+        is_auth = "#{auth?(ip, port, name)}"
       else
         is_auth = 'Unknown'
       end
@@ -80,6 +85,7 @@ class Metasploit3 < Msf::Auxiliary
     unless rows.blank?
       table = Msf::Ui::Console::Table.new(
         Msf::Ui::Console::Table::Style::Default,
+        'Header'  => "rsync modules for #{ip}:#{port}",
         'Columns' =>
         [
           'Name',
@@ -97,7 +103,7 @@ class Metasploit3 < Msf::Auxiliary
       ip,
       mods.to_json,
       'rsync')
-    print_good('Saved file to: ' + path)
+    vprint_good('Saved file to: ' + path)
     mods
   end
 
@@ -112,8 +118,9 @@ class Metasploit3 < Msf::Auxiliary
       :host => ip,
       :port => rport,
       :proto => 'tcp',
-      :name => 'rsync'
+      :name => 'rsync',
+      :info => version.chomp
     )
-    module_list_format(ip, data)
+    module_list_format(ip, rport, data)
   end
 end
