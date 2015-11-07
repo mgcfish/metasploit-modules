@@ -10,11 +10,27 @@ class Metasploit3 < Msf::Auxiliary
   include Msf::Auxiliary::Scanner
   include Msf::Auxiliary::Report
 
+  RSYNC_HEADER = '@RSYNCD:'
+
+  AUTH_REQURED = 'Authentication Required'
+  AUTH_HEADER_OK = 'Header OK'
+  AUTH_UNEXPECTED = 'Unexpected Response'
+  AUTH_NO_RESPONSE = 'No Response'
+
   def initialize
     super(
-      'Name'        => 'Rsync Unauthenticated List Command',
-      'Description' => 'List all (listable) modules from a rsync daemon',
-      'Author'      => ['ikkini', 'Nixawk'],
+      'Name'        => 'List Rsync Modules',
+      'Description' => %q(
+        An rsync module is essentially a directory share.  These modules can
+        optionally be protected by a password.  This module connects to and
+        negotiates with an rsync server, lists the available modules and,
+        optionally, determines if the module requires a password to access.
+      ),
+      'Author'      => [
+        'ikkini', # original metasploit module
+        'Jon Hart <jon_hart[at]rapid7.com>', # improved metasploit module
+        'Nixawk' # improved metasploit module
+      ],
       'References'  =>
         [
           ['URL', 'http://rsync.samba.org/ftp/rsync/rsync.html']
@@ -24,103 +40,180 @@ class Metasploit3 < Msf::Auxiliary
     register_options(
       [
         Opt::RPORT(873),
-        OptBool.new('AUTH_CHECK', [true, 'Check authentication or not', false])
+        OptBool.new('TEST_AUTHENTICATION', [true, 'Test if the rsync module requires authentication', true])
       ], self.class)
 
     register_advanced_options(
       [
-        OptInt.new('TIMEOUT', [false, 'Maximum number of seconds to wait rsync response', 4])
+        OptBool.new('SHOW_MOTD', [true, 'Show the rsync motd, if found', false]),
+        OptBool.new('SHOW_VERSION', [true, 'Show the rsync version', false]),
+        OptInt.new('READ_TIMEOUT', [true, 'Seconds to wait while reading rsync responses', 2])
       ], self.class)
   end
 
-  def rsync(dir)
-    connect
-
-    version = sock.get_once # server_initialisation
-    return if version.blank?
-
-    sock.get(datastore['TIMEOUT']) # server_motd
-    sock.puts(version) # client_initialisation
-    sock.puts(dir) # client_query
-    data = sock.get(datastore['TIMEOUT']) # module_list
-    data.gsub!('@RSYNCD: EXIT', '') unless data.blank?
-    disconnect
-    [version, data]
+  def peer
+    "#{rhost}:#{rport}"
   end
 
-  def auth?(ip, port, dir)
-    _version, data = rsync(dir)
-    if data && data =~ /RSYNCD: OK/m
-      vprint_status("#{ip}:#{port}: #{dir} needs authentication: false")
-      false
-    else
-      vprint_status("#{ip}:#{port}: #{dir} needs authentication: true")
+  def read_timeout
+    datastore['READ_TIMEOUT']
+  end
+
+  def parse_rsync_rule(response)
+    rsyncds = [] # @RSYNCD: *
+    motds = [] # Message of the day
+    if response
+      response.strip!
+      response.split(/\n/).map do |l|
+        l =~ /^#{RSYNC_HEADER}/ ? (rsyncds << l) : (motds << l)
+      end
+    end
+    [rsyncds, motds]
+  end
+
+  def get_rsync_exit_state(rmodule, resp)
+    if rmodule.empty? && resp && resp =~ /#{RSYNC_HEADER} EXIT/
       true
+    else
+      false
     end
   end
 
-  def module_list_format(ip, port, module_list)
-    mods = {}
-    rows = []
-
-    return if module_list.blank?
-
-    module_list = module_list.strip
-    module_list = module_list.split("\n")
-
-    module_list.each do |mod|
-      name, desc = mod.split("\t")
-      name = name.strip
-      next unless name
-
-      if datastore['AUTH_CHECK']
-        is_auth = "#{auth?(ip, port, name)}"
+  def get_rsync_auth_state(rmodule, resp)
+    if resp
+      vprint_status("#{peer} trying to auth #{rmodule}")
+      if resp =~ /#{RSYNC_HEADER} AUTHREQD/
+        AUTH_REQURED
+      elsif resp =~ /#{RSYNC_HEADER} OK/
+        AUTH_HEADER_OK
       else
-        is_auth = 'Unknown'
+        vprint_error("#{peer} - unexpected response when connecting to #{rmodule}")
+        AUTH_UNEXPECTED
+      end
+    else
+      vprint_error("#{peer} - no response when connecting to #{rmodule}")
+      AUTH_NO_RESPONSE
+    end
+  end
+
+  def rsync(modulename)
+    begin
+      state = 'No Authentication'
+      rsyncds = []
+      motds = []
+
+      # A RSYNC client upon connecting should receive the ASCII string
+      # "@RSYNC: 31.0" ended by a [l]LF.
+      connect
+
+      version = sock.get_once(-1, read_timeout)
+      if version
+        motds << version
+
+        # Next the client should expect the Message of the Day (MOTD),
+        # this is multiple lines, again, seperated by a LF. The client
+        # should continue reading data until a [2]Empty line is found.
+
+        resp = sock.get(read_timeout)
+        if resp
+          rs, ms = parse_rsync_rule(resp)
+          rsyncds |= rs
+          motds |= ms
+        end
+
+        # Now the client should respond with "@RSYNCD: 31.0" terminated
+        # by a LF.
+        sock.puts(version)
+
+        # If the client sends a LF with no module name , the client should
+        # expect ASCII strings seperated by LFs, the client should terminate the
+        # connection upon receiving "@RSYNCD: EXIT"(LF)
+
+        # If the client sends a module name terminated by LF, and the module is
+        # present, and doesn't require authentication, a "@RSYNCD: OK"(LF) is
+        # sent. If the modules is not present an "@ERROR: data"(LF) is sent to
+        # the client. If authentication a "@RSYNCD: AUTHREQ <challenge>" is
+        # sent, in which case the client must respond with <user> <response>
+        # where 'response' is the MD4 hash of password+challenge in base64.
+
+        sock.puts("#{modulename}\n")
+
+        resp = sock.get(read_timeout)
+        if resp
+          rs, ms = parse_rsync_rule(resp)
+          rsyncds |= rs
+          motds |= ms
+        end
+
+        exit_status = get_rsync_exit_state(modulename, resp)
+        if !exit_status && datastore['TEST_AUTHENTICATION']
+          state = get_rsync_auth_state(modulename, resp)
+        end
       end
 
-      rows << [name, desc, is_auth]
+    ensure
+      disconnect
     end
+    [version, state, rsyncds, motds]
+  end
 
-    unless rows.blank?
-      table = Msf::Ui::Console::Table.new(
-        Msf::Ui::Console::Table::Style::Default,
-        'Header'  => "rsync modules for #{ip}:#{port}",
-        'Columns' =>
-        [
-          'Name',
-          'Comment',
-          'Authentication?'
-        ],
-        'Rows' => rows)
-      vprint_line(table.to_s)
+  def get_rsync_modules(motds)
+    modules = []
+    return if motds.blank?
+
+    motds.each do |motd|
+      name, desc = motd.split("\t") if motd && motd.include?("\t")
+      next unless name
+      name = name.strip
+      modules << [name, desc]
     end
-    mods[ip] = rows
-    return if mods.blank?
-    path = store_loot(
-      'rsync',
-      'text/plain',
-      ip,
-      mods.to_json,
-      'rsync')
-    vprint_good('Saved file to: ' + path)
-    mods
+    modules
   end
 
   def run_host(ip)
-    vprint_status("#{ip}:#{rport}")
-    version, data = rsync('')
-    return if data.blank?
+    version, state, rsyncds, motds = rsync('')
+    return if version.blank?
 
-    print_good("#{ip}:#{rport} - #{version.chomp} found")
+    modules = get_rsync_modules(motds)
+    report_note(
+      host: ip,
+      port: rport,
+      proto: 'tcp',
+      type: 'rsync_modules',
+      data: {
+        version: version,
+        state: state,
+        rsyncds: rsyncds,
+        motds: motds
+      })
 
-    report_service(
-      :host => ip,
-      :port => rport,
-      :proto => 'tcp',
-      :name => 'rsync',
-      :info => version.chomp
-    )
-    module_list_format(ip, rport, data)
+    print_status("#{peer} - rsync version: #{version.chomp}") if version && datastore['SHOW_VERSION']
+    print_status("#{peer} - rsync MOTD: #{rsyncds}") if rsyncds && datastore['SHOW_MOTD']
+
+    return if modules.blank?
+    print_good("#{peer} - #{modules.size} rsync modules found: #{modules.join(', ')}")
+
+    rows = []
+    modules.each do |name, desc|
+      version, state, rsyncds, motds = rsync(name)
+      rows << [name, desc, state]
+    end
+
+    return if rows.blank?
+    table = Msf::Ui::Console::Table.new(
+      Msf::Ui::Console::Table::Style::Default,
+      'Header'  => "rsync modules for #{peer}",
+      'Columns' =>
+      [
+        'Name',
+        'Comment',
+        'Authentication?'
+      ],
+      'Rows' => rows)
+    vprint_line(table.to_s)
+  end
+
+  def setup
+    fail_with(Failure::BadConfig, 'READ_TIMEOUT must be > 0') if read_timeout <= 0
   end
 end
