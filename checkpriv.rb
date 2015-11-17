@@ -15,6 +15,7 @@
 # http://www.darkoperator.com/blog/2013/6/11/
 # stealing-user-certificates-with-meterpreter-mimikatz-extensi.html
 #
+# Provided by Nixawk / Carlos Perez at carlos_perez[at]darkoperator.com
 # Location: /opt/metasploit-framework/scripts/meterpreter/checkpriv.rb
 
 
@@ -28,7 +29,7 @@ session = client
   case opt
   when "-h"
     print_line("CheckPriv -- Check Admin Token / SYSTEM Priv / UAC ebable")
-    print_line("USAGE: run checkvm")
+    print_line("USAGE: run checkpriv")
     print_line(@@exec_opts.usage)
     raise Rex::Script::Completed
   end
