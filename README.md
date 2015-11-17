@@ -5,6 +5,7 @@ Metasploit-Modules is a metasploit framework modules collection for security res
 | *Module Name* | *Description* |
 |:--------------|:--------------|
 | caidao\_php\_backdoor\_exec | exploit chinese caidao php backdoor |
+| checkpriv | [Check Admin Token / SYSTEM Priv / UAC ebable](http://www.darkoperator.com/blog/2013/6/11/stealing-user-certificates-with-meterpreter-mimikatz-extensi.html) |
 | cn\_caidao\_backdoor\_bruteforce | bruteforce chinese caidao backdoor (php, asp, aspx are supported) |
 | enum\_dns | review enum\_dns created by darkoperator. |
 | joomla\_com\_realestatemanager\_sqli | [Joomla Real Estate Manager Component 3.7 - SQL injection](https://www.exploit-db.com/exploits/38445/) |
