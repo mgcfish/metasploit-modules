@@ -12,5 +12,6 @@ Metasploit-Modules is a metasploit framework modules collection for security res
 | joomla\_contenthistory\_sqli | [Joomla com_contenthistory Error-Based SQL Injection](https://www.trustwave.com/Resources/SpiderLabs-Blog/Joomla-SQL-Injection-Vulnerability-Exploit-Results-in-Full-Administrative-Access/) |
 | modules\_list | rsync module (add auth check / data format) |
 | php\_cookie\_backdoor | msf [php cookie backdoor](https://github.com/all3g/fuzzdb/blob/master/web-backdoors/php/caidao_cookies.php) |
+| svn\_scanner | svn discoluse scanner (only for .svn/entries) |
 | wp\_cm\_download\_manager\_plugin\_exec | Wordpress CM Download Manager Plugin Code Injection |
 
