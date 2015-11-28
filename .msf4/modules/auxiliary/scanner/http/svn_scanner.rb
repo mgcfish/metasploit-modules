@@ -22,82 +22,65 @@ class Metasploit3 < Msf::Auxiliary
 
     register_options(
       [
-        OptString.new('TARGETURI', [ true, "The test path to .svn directory", '/']),
-        OptBool.new('GET_SOURCE', [ false, "Attempt to obtain file source code", true ])
+        OptString.new('TARGETURI', [ true, "The test path to .svn directory", '/'])
       ], self.class)
   end
 
-  def peer
-    "#{rhost}:#{rport}"
+  def uri(path)
+    full_uri =~ %r{/$} ? "#{full_uri}#{path}" : "#{full_uri}/#{path}"
   end
 
-  def svn_entry(url, filename)
-    t_url = normalize_uri(url, '/.svn/text-base/', "#{filename}.svn-base")
-
-    return unless datastore['GET_SOURCE']
-    res = send_request_cgi({ 'uri' => t_url })
-    retuen unless res && res.code == 200
-    return if res.body.blank?
-
-    path = store_loot(
-      t_url,
-      'text/plain',
-      datastore['RHOST'],
-      res.body,
-      t_url)
-    print_good("Saved file to: #{path}")
-  end
-
-  def svn_entries_url(url)
-    normalize_uri(url, '/.svn/entries')
-  end
-
-  def svn_entries(url)
+  def svn_entries_parse(resp)
+    return if resp.blank?
     authors = []
     dirs = []
     files = []
-
-    res = send_request_cgi({ 'uri' => svn_entries_url(url) })
-
-    if res && res.code == 200
-      temp_line = ''
-      if res.body
-        res.body.split("\n").each do |line|
-          if line == 'has-props' # code developer
-            authors << temp_line unless temp_line.blank?
-          elsif line == 'file' # source code file
-            t_file = svn_entry(url, temp_line) unless temp_line.blank?
-            files << t_file unless t_file.blank?
-          elsif line == 'dir' # directory
-            unless temp_line.blank?
-              dirs << temp_line if temp_line
-              t_authors, t_dirs, t_files = svn_entries(normalize_uri(url, temp_line))
-              authors |= t_authors unless t_authors.blank?
-              dirs |= t_dirs unless t_dirs.blank?
-              files |= t_files unless t_files.blank?
-            end
-          end
-          temp_line = line
-        end
+    temp_line = ''
+    resp.split("\n").each do |line|
+      if line == 'has-props' # code developer
+        authors << temp_line unless temp_line.blank?
+      elsif line == 'file' # source code file
+        files << temp_line unless temp_line.blank?
+      elsif line == 'dir' # directory
+        dirs << temp_line unless temp_line.blank?
       end
-
-      unless authors.blank? && dirs.blank? && files.blank?
-        print_good("[#{peer}] SVN Entries file found.")
-        report_note(
-          host: rhost,
-          port: rport,
-          proto: 'tcp',
-          type: 'svn_disclosure',
-          data: { authors: authors, dirs: dirs, files: files }
-        )
-      end
+      temp_line = line
     end
-    [authors, dirs, files]
+    {authors: authors, dirs: dirs, files: files}
+  end
+
+  def svn_entries(url)
+    svn_uri = normalize_uri(url, '.svn/entries')
+    peer_uri = uri('.svn/entries')
+    res = send_request_cgi({
+      'uri' => svn_uri
+    })
+
+    unless res
+      vprint_error("#{peer_uri} - No response received")
+      return
+    end
+    vprint_status("#{peer_uri} - HTTP/#{res.proto} #{res.code} #{res.message}")
+    return unless res.code == 200
+
+    records = svn_entries_parse(res.body)
+    unless records[:authors].blank? && records[:dirs].blank? && records[:files].blank?
+      print_good("#{peer_uri} - svn entries file found with #{records}.")
+
+      report_note(
+        host: rhost,
+        port: rport,
+        proto: 'tcp',
+        type: 'svn_disclosure',
+        data: records
+      )
+      path = store_loot('svn_entries', 'text/plain', rhost, res.body, peer_uri)
+      print_good("Saved file to: #{path}")
+    end
   end
 
   def run_host(target_host)
-    vprint_status("#{peer} - scanning svn disclosure")
-    vhost = datastore['VHOST'] || wmap_target_host
-    svn_entries(normalize_uri(target_uri.path))
+    vprint_status("#{full_uri} - scanning svn disclosure")
+    svn_entries(target_uri.path)
   end
 end
