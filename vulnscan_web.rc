@@ -1,0 +1,8 @@
+# http://infosecninja.blogspot.jp/2014/04/vulnerability-scanning-with-metasploit_25.html
+
+load wmap
+wmap_sites -a http://192.168.1.1
+wmap_sites -l
+wmap_targets -d 0
+wmap_targets -l
+wmap_run -e
